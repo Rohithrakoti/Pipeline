@@ -1,0 +1,335 @@
+parameters:
+- name: projectNames
+  displayName: 'Project Names (comma separated)'
+  type: string
+  default: 'AMEQPR,TTOQPR,HRQPR,GCFQPR,RISKQPR,ASIAQPR'
+
+trigger:
+- main
+
+pool: sc-linux-qa
+
+variables:
+- group: 50865-migration
+
+stages:
+
+# =========================================================
+# STAGE 1 - GET ALL REPOS
+# =========================================================
+
+- stage: GetRepos
+  displayName: 'Get All Repo Names'
+
+  jobs:
+
+  - job: FetchRepos
+
+    steps:
+
+    - script: |
+        pip install requests
+        python get_all_repos_to_csv.py
+      displayName: 'Fetch all repo names and write csv'
+      env:
+        ORG1_URL: "https://dev.azure.com/sc-ado"
+        ORG1_PAT: $(ado_repo_PAT_PROD)
+        PROJECT_NAMES: ${{ parameters.projectNames }}
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: 'repos.csv'
+        ArtifactName: 'repo-csv'
+      displayName: 'Publish repos.csv as build artifact'
+
+
+# =========================================================
+# STAGE 2 - VALIDATE REPO SYNC
+# =========================================================
+
+- stage: ValidateSync
+  displayName: 'Validate Repo Sync'
+  dependsOn: GetRepos
+
+  jobs:
+
+  - job: Validate
+    timeoutInMinutes: 360
+
+    strategy:
+      matrix:
+
+        Batch1:
+          batchNumber: 1
+          batchSize: 1000
+
+        Batch2:
+          batchNumber: 2
+          batchSize: 1000
+
+        Batch3:
+          batchNumber: 3
+          batchSize: 1000
+
+        Batch4:
+          batchNumber: 4
+          batchSize: 1000
+
+        Batch5:
+          batchNumber: 5
+          batchSize: 1000
+
+        Batch6:
+          batchNumber: 6
+          batchSize: 1000
+
+        Batch7:
+          batchNumber: 7
+          batchSize: 1000
+
+        Batch8:
+          batchNumber: 8
+          batchSize: 1000
+
+        Batch9:
+          batchNumber: 9
+          batchSize: 1000
+
+        Batch10:
+          batchNumber: 10
+          batchSize: 1000
+
+        Batch11:
+          batchNumber: 11
+          batchSize: 1000
+
+        Batch12:
+          batchNumber: 12
+          batchSize: 1000
+
+        Batch13:
+          batchNumber: 13
+          batchSize: 1000
+
+        Batch14:
+          batchNumber: 14
+          batchSize: 1000
+
+        Batch15:
+          batchNumber: 15
+          batchSize: 1000
+
+        Batch16:
+          batchNumber: 16
+          batchSize: 1001
+
+    steps:
+
+    - task: DownloadBuildArtifacts@0
+      inputs:
+        buildType: 'current'
+        downloadType: 'single'
+        artifactName: 'repo-csv'
+        downloadPath: '$(Pipeline.Workspace)'
+
+    - script: |
+        echo "===== DEBUG: repos.csv contents ====="
+        cat $(Pipeline.Workspace)/repo-csv/repos.csv || echo "repos.csv not found"
+      displayName: 'Print repos.csv contents'
+
+    - script: |
+        python --version
+      displayName: 'Check python version'
+
+    - script: |
+
+        python validateRepoSync.py
+
+        echo "===== DEBUG: Listing sync_report directory ====="
+        ls -lh sync_report || echo "sync_report directory not found"
+
+        echo "===== DEBUG: Listing files in workspace ====="
+        ls -lh
+
+      displayName: 'Run repo sync validation and debug output'
+
+      env:
+        ORG1_URL: "https://dev.azure.com/sc-ado"
+        ORG2_URL: "https://ado.global.standardchartered.com/CrmxAdoCollection"
+
+        ORG1_PAT: $(ado_repo_PAT_PROD)
+        ORG2_PAT: $(ado_repo_PAT_onPrem)
+
+        PROJECT_NAMES: ${{ parameters.projectNames }}
+
+        REPO_CSV: $(Pipeline.Workspace)/repo-csv/repos.csv
+
+        BATCH_NUMBER: $(batchNumber)
+        BATCH_SIZE: $(batchSize)
+
+    - script: |
+
+        if [ ! -f sync_report/repoList.csv ]; then
+          echo "project,repo" > sync_report/repoList.csv
+        fi
+
+      displayName: 'Ensure repoList.csv exists'
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish failed repo list'
+      inputs:
+        PathtoPublish: 'sync_report/repoList.csv'
+        ArtifactName: 'failed-repo-list-$(batchNumber)'
+        publishLocation: 'Container'
+
+
+# =========================================================
+# STAGE 3 - AGGREGATE FAILED REPOS
+# =========================================================
+
+  - job: AggregateFailedRepos
+    displayName: 'Aggregate all failed repo lists'
+    dependsOn: Validate
+
+    pool: sc-linux-qa
+
+    steps:
+
+    - task: DownloadBuildArtifacts@0
+      displayName: 'Download all failed repo lists'
+
+      inputs:
+        buildType: 'current'
+        downloadType: 'specific'
+        downloadPath: '$(Pipeline.Workspace)/all-failed-repos'
+
+    - script: |
+
+        echo "project,repo" > $(Pipeline.Workspace)/repoList.csv
+
+        echo "===== DEBUG: Finding all repoList.csv files ====="
+
+        find $(Pipeline.Workspace)/all-failed-repos -type f -name repoList.csv
+
+        echo "===== Aggregating all failed repo lists ====="
+
+        find $(Pipeline.Workspace)/all-failed-repos -type f -name repoList.csv | while read file
+        do
+          echo "Processing $file"
+
+          tail -n +2 "$file" >> $(Pipeline.Workspace)/repoList.csv
+
+        done
+
+        echo "===== FINAL repoList.csv ====="
+
+        wc -l $(Pipeline.Workspace)/repoList.csv
+
+      displayName: 'Aggregate all failed repoList.csv files'
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish final failed repo list'
+
+      inputs:
+        PathtoPublish: '$(Pipeline.Workspace)/repoList.csv'
+        ArtifactName: 'all-failed-repo-list'
+        publishLocation: 'Container'
+
+
+# =========================================================
+# STAGE 4 - PUSH FAILED REPOLIST TO MIGRATION REPO
+# =========================================================
+
+  - job: PushFailedRepoList
+    displayName: 'Push failed repo list to migration repo'
+    dependsOn: AggregateFailedRepos
+
+    pool: sc-linux-qa
+
+    steps:
+
+    - task: DownloadBuildArtifacts@0
+      displayName: 'Download all-failed-repo-list artifact'
+
+      inputs:
+        buildType: 'current'
+        downloadType: 'single'
+        artifactName: 'all-failed-repo-list'
+        downloadPath: '$(Pipeline.Workspace)/all-failed-repo-list'
+
+    - script: |
+
+        set -e
+
+        echo "Preparing to push failed repo list..."
+
+        FEATURE_BRANCH="feature/get-failed-repoList"
+
+        ORG="ado.global.standardchartered.com/CrmxAdoCollection"
+
+        PROJECT="TTOQPR"
+
+        TARGET_REPO="50865-migration"
+
+        AUTH=$(printf ":%s" "$ORG2_PAT" | base64)
+
+        rm -rf "$TARGET_REPO"
+
+        echo "Cloning target repo..."
+
+        git -c http.extraheader="Authorization: Basic $AUTH" clone \
+        --single-branch \
+        --branch $FEATURE_BRANCH \
+        https://$ORG/$PROJECT/_git/$TARGET_REPO
+
+        echo "Checking for new repoList.csv in artifact..."
+
+        find $(Pipeline.Workspace)/all-failed-repo-list
+
+        REPO_LIST_PATH=$(find $(Pipeline.Workspace)/all-failed-repo-list -name repoList.csv | head -n 1)
+
+        if [ -z "$REPO_LIST_PATH" ]; then
+          echo "ERROR: repoList.csv not found in artifact!"
+          exit 1
+        fi
+
+        echo "repoList.csv found at: $REPO_LIST_PATH"
+
+        echo "Deleting old repoList.csv if exists..."
+
+        rm -f $TARGET_REPO/migration-input/repoList.csv
+
+        echo "Copying new repoList.csv..."
+
+        cp "$REPO_LIST_PATH" $TARGET_REPO/migration-input/repoList.csv
+
+        echo "Listing migration-input directory after copy:"
+
+        ls -lh $TARGET_REPO/migration-input/
+
+        cd $TARGET_REPO
+
+        git config user.email "ado-bot@yourdomain.com"
+        git config user.name "ADO Bot"
+
+        echo "Staging file..."
+
+        git add migration-input/repoList.csv
+
+        echo "Checking for changes to commit..."
+
+        if git diff --cached --quiet; then
+          echo "No changes to commit. Exiting."
+          exit 0
+        fi
+
+        echo "Committing and pushing changes..."
+
+        git commit -m "Update failed repo list from pipeline"
+
+        git -c http.extraheader="Authorization: Basic $AUTH" push origin $FEATURE_BRANCH
+
+      displayName: 'Copy and push repoList.csv to migration repo'
+
+      env:
+        ORG2_PAT: $(ado_repo_PAT_onPrem)
