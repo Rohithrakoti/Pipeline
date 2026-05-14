@@ -1,0 +1,38 @@
+- job: AggregateFailedRepos
+  displayName: 'Aggregate all failed repo lists'
+  dependsOn: ValidateSync
+  pool: sc-linux-qa
+
+  steps:
+
+  - task: DownloadBuildArtifacts@0
+    displayName: 'Download all failed repo lists'
+    inputs:
+      buildType: 'current'
+      downloadType: 'single'
+      downloadPath: '$(Pipeline.Workspace)/all-failed-repos'
+
+  - script: |
+      echo "project,repo" > $(Pipeline.Workspace)/repoList.csv
+
+      echo "===== DEBUG: Finding all repoList.csv files ====="
+      find $(Pipeline.Workspace)/all-failed-repos -type f -name repoList.csv
+
+      echo "===== Aggregating all failed repo lists ====="
+
+      find $(Pipeline.Workspace)/all-failed-repos -type f -name repoList.csv | while read file; do
+          echo "Processing $file"
+          tail -n +2 "$file" >> $(Pipeline.Workspace)/repoList.csv
+      done
+
+      echo "===== FINAL repoList.csv ====="
+      wc -l $(Pipeline.Workspace)/repoList.csv
+
+  displayName: 'Aggregate all failed repoList.csv files'
+
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publish final failed repo list'
+    inputs:
+      PathtoPublish: '$(Pipeline.Workspace)/repoList.csv'
+      ArtifactName: 'all-failed-repo-list'
+      publishLocation: 'Container'
