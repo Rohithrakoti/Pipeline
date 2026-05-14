@@ -1,0 +1,148 @@
+- job: Validate
+  timeoutInMinutes: 360
+
+  strategy:
+    matrix:
+      Batch1:
+        batchNumber: 1
+        batchSize: 1000
+      Batch2:
+        batchNumber: 2
+        batchSize: 1000
+      Batch3:
+        batchNumber: 3
+        batchSize: 1000
+      Batch4:
+        batchNumber: 4
+        batchSize: 1000
+      Batch5:
+        batchNumber: 5
+        batchSize: 1000
+      Batch6:
+        batchNumber: 6
+        batchSize: 1000
+      Batch7:
+        batchNumber: 7
+        batchSize: 1000
+      Batch8:
+        batchNumber: 8
+        batchSize: 1000
+      Batch9:
+        batchNumber: 9
+        batchSize: 1000
+      Batch10:
+        batchNumber: 10
+        batchSize: 1000
+      Batch11:
+        batchNumber: 11
+        batchSize: 1000
+      Batch12:
+        batchNumber: 12
+        batchSize: 1000
+      Batch13:
+        batchNumber: 13
+        batchSize: 1000
+      Batch14:
+        batchNumber: 14
+        batchSize: 1000
+      Batch15:
+        batchNumber: 15
+        batchSize: 1000
+      Batch16:
+        batchNumber: 16
+        batchSize: 1001
+
+  steps:
+
+    - task: DownloadBuildArtifacts@0
+      inputs:
+        buildType: 'current'
+        downloadType: 'single'
+        artifactName: 'repo-csv'
+        downloadPath: '$(Pipeline.Workspace)'
+
+    - script: |
+        echo "===== DEBUG: repos.csv contents ====="
+        cat $(Pipeline.Workspace)/repo-csv/repos.csv || echo "repos.csv not found"
+      displayName: 'Print repos.csv contents'
+
+    - script: |
+        python --version
+      displayName: 'Check Python Version'
+
+    - script: |
+        python validateRepoSync.py
+
+        echo "===== DEBUG: Listing sync_report directory ====="
+        ls -lh sync_report || echo "sync_report directory not found"
+
+        echo "===== DEBUG: Listing files in workspace ====="
+        ls -lh
+
+      displayName: 'Run repo sync validation and debug output'
+      env:
+        ORG1_URL: "https://dev.azure.com/sc-ado"
+        ORG2_URL: "https://ado.global.standardchartered.com/CrmxAdoCollection"
+        ORG1_PAT: $(ado_repo_PAT_PROD)
+        ORG2_PAT: $(ado_repo_PAT_onPrem)
+        PROJECT_NAMES: ${{ parameters.projectNames }}
+        REPO_CSV: $(Pipeline.Workspace)/repo-csv/repos.csv
+        BATCH_NUMBER: $(batchNumber)
+        BATCH_SIZE: $(batchSize)
+
+    - script: |
+        if [ ! -f sync_report/repoList.csv ]; then
+          echo "project,repo" > sync_report/repoList.csv
+        fi
+      displayName: 'Ensure repoList.csv exists'
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish failed repo list'
+      inputs:
+        PathtoPublish: 'sync_report/repoList.csv'
+        ArtifactName: 'failed-repo-list-$(batchNumber)'
+        publishLocation: 'Container'
+
+
+- job: AggregateFailedRepos
+  displayName: 'Aggregate all failed repo lists'
+  dependsOn: Validate
+  pool: sc-linux-qa
+
+  steps:
+
+    - task: DownloadBuildArtifacts@0
+      displayName: 'Download all failed repo lists'
+      inputs:
+        buildType: 'current'
+        downloadType: 'specific'
+        downloadPath: '$(Pipeline.Workspace)/all-failed-repos'
+
+    - script: |
+
+        echo "project,repo" > $(Pipeline.Workspace)/repoList.csv
+
+        echo "===== DEBUG: Finding all repoList.csv files ====="
+
+        find $(Pipeline.Workspace)/all-failed-repos -type f -name repoList.csv
+
+        echo "===== Aggregating all failed repo lists ====="
+
+        find $(Pipeline.Workspace)/all-failed-repos -type f -name repoList.csv | while read file
+        do
+          echo "Processing $file"
+          tail -n +2 "$file" >> $(Pipeline.Workspace)/repoList.csv
+        done
+
+        echo "===== FINAL repoList.csv ====="
+
+        wc -l $(Pipeline.Workspace)/repoList.csv
+
+      displayName: 'Aggregate all failed repoList.csv files'
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish final failed repo list'
+      inputs:
+        PathtoPublish: '$(Pipeline.Workspace)/repoList.csv'
+        ArtifactName: 'all-failed-repo-list'
+        publishLocation: 'Container'
